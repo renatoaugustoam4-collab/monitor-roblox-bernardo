@@ -48,7 +48,33 @@ def read_previous_state():
     return None, 0
 
 
+def send_requested_test():
+    """Emit a distinguishable one-time test notification on the next cron run."""
+    token = os.environ.get("NTFY_TEST_ONCE")
+    if not token:
+        return
+    try:
+        lines = call("https://ntfy.sh/" + STATE_TOPIC + "/json?poll=1&since=12h")
+        events = [json.loads(line) for line in lines.splitlines() if line.strip()]
+    except (urllib.error.URLError, ValueError, KeyError) as error:
+        print("Test skipped: cannot verify prior test:", error)
+        return
+    marker = "test-sent:" + token
+    if any(x.get("event") == "message" and x.get("message") == marker for x in events):
+        print("Test notification previously sent")
+        return
+    publish(
+        TOPIC,
+        "TESTE de notificacao do monitor Roblox. Esta mensagem e apenas um teste, "
+        "nao indica que B_augusto entrou online.",
+        {"Title": "TESTE: alerta Roblox", "Priority": "high", "Tags": "test_tube"},
+    )
+    publish(STATE_TOPIC, marker, {"Title": "monitor-test-state", "Priority": "min"})
+    print("TEST NOTIFICATION SENT")
+
+
 def main():
+    send_requested_test()
     data = json.dumps({"userIds": [USER_ID]}).encode("utf-8")
     payload = call(
         "https://presence.roblox.com/v1/presence/users",
