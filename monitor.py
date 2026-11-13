@@ -53,6 +53,9 @@ def send_requested_test():
     token = os.environ.get("NTFY_TEST_ONCE")
     if not token:
         return
+    # Explicit expiration keeps this temporary diagnostic from firing on future days.
+    if dt.datetime.now(dt.timezone.utc) >= dt.datetime(2026, 11, 13, 2, 10, tzinfo=dt.timezone.utc):
+        return
     try:
         lines = call("https://ntfy.sh/" + STATE_TOPIC + "/json?poll=1&since=12h")
         events = [json.loads(line) for line in lines.splitlines() if line.strip()]
