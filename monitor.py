@@ -6,6 +6,7 @@ circumvent Roblox privacy settings, log into accounts, or read Roblox cookies.
 import datetime as dt
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -48,42 +49,37 @@ def read_previous_state():
     return None, 0
 
 
-def send_requested_test():
-    """Emit a distinguishable one-time test notification on the next cron run."""
-    token = os.environ.get("NTFY_TEST_ONCE")
-    if not token:
-        return
-    # Explicit expiration keeps this temporary diagnostic from firing on future days.
-    if dt.datetime.now(dt.timezone.utc) >= dt.datetime(2026, 11, 13, 2, 10, tzinfo=dt.timezone.utc):
-        return
-    try:
-        lines = call("https://ntfy.sh/" + STATE_TOPIC + "/json?poll=1&since=12h")
-        events = [json.loads(line) for line in lines.splitlines() if line.strip()]
-    except (urllib.error.URLError, ValueError, KeyError) as error:
-        print("Test skipped: cannot verify prior test:", error)
-        return
-    marker = "test-sent:" + token
-    if any(x.get("event") == "message" and x.get("message") == marker for x in events):
-        print("Test notification previously sent")
-        return
-    publish(
-        TOPIC,
-        "TESTE de notificacao do monitor Roblox. Esta mensagem e apenas um teste, "
-        "nao indica que B_augusto entrou online.",
-        {"Title": "TESTE: alerta Roblox", "Priority": "high", "Tags": "test_tube"},
-    )
-    publish(STATE_TOPIC, marker, {"Title": "monitor-test-state", "Priority": "min"})
-    print("TEST NOTIFICATION SENT")
+def fetch_roblox_presence(data):
+    """Retry temporary failures only. Never convert an API error to offline."""
+    transient_codes = {429, 500, 502, 503, 504}
+    for attempt in range(3):
+        try:
+            return call(
+                "https://presence.roblox.com/v1/presence/users",
+                data,
+                {"Content-Type": "application/json",
+                 "User-Agent": "RobloxPresenceMonitor/1.0"},
+            )
+        except urllib.error.HTTPError as error:
+            if error.code not in transient_codes:
+                raise
+            print(f"Roblox API temporarily unavailable: HTTP {error.code} "
+                  f"(attempt {attempt + 1}/3)")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            print(f"Roblox presence network error (attempt {attempt + 1}/3): "
+                  f"{error}")
+        if attempt < 2:
+            time.sleep((attempt + 1) * 2)
+    print("Roblox presence unavailable after retries; "
+          "skipping this check without changing the recorded status.")
+    return None
 
 
 def main():
-    send_requested_test()
     data = json.dumps({"userIds": [USER_ID]}).encode("utf-8")
-    payload = call(
-        "https://presence.roblox.com/v1/presence/users",
-        data,
-        {"Content-Type": "application/json", "User-Agent": "RobloxPresenceMonitor/1.0"},
-    )
+    payload = fetch_roblox_presence(data)
+    if payload is None:
+        return
     response = json.loads(payload)
     matches = [
         item for item in response.get("userPresences", [])
