@@ -27,9 +27,23 @@ def call(url, data=None, headers=None):
 
 
 def publish(topic, message, extra_headers=None):
+    """Retry temporary ntfy failures without crashing the cron job."""
     headers = {"Content-Type": "text/plain; charset=utf-8"}
     headers.update(extra_headers or {})
-    return call("https://ntfy.sh/" + topic, message.encode("utf-8"), headers)
+    for attempt in range(3):
+        try:
+            call("https://ntfy.sh/" + topic, message.encode("utf-8"), headers)
+            return True
+        except urllib.error.HTTPError as error:
+            print(f"ntfy HTTP {error.code}; attempt {attempt + 1}/3")
+            if error.code not in (429, 500, 502, 503, 504):
+                return False
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            print(f"ntfy connection failed; attempt {attempt + 1}/3: {error}")
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+    print("ntfy unavailable: notification was not confirmed; monitoring will retry later")
+    return False
 
 
 def read_previous_state():
@@ -101,22 +115,27 @@ def main():
         brazil_time = dt.datetime.now(
             dt.timezone(dt.timedelta(hours=-3))
         ).strftime("%d/%m/%Y %H:%M")
-        publish(
+        delivered = publish(
             TOPIC,
             f"Conta monitorada detectada online em {brazil_time} (Brasília). "
             f"Tipo de presença: {presence}.",
             {"Title": "Roblox: conta online", "Priority": "high"},
         )
+        if not delivered:
+            print("Online alert delivery not confirmed; preserving prior status for next check")
+            return
         print("Online notification sent")
 
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     if status != previous or now - last_time >= 6 * 3600:
-        publish(
+        if publish(
             STATE_TOPIC,
             status,
             {"Title": "Roblox monitor state", "Priority": "min"},
-        )
-        print("State recorded")
+        ):
+            print("State recorded")
+        else:
+            print("State could not be saved; continuing on the next scheduled check")
 
 
 if __name__ == "__main__":
